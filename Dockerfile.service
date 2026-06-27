@@ -1,0 +1,35 @@
+FROM python:3.11-slim
+
+ARG SERVICE_NAME
+ARG SERVICE_PORT
+
+WORKDIR /app
+
+# Install curl for health checks and stress-ng for demo scenarios
+RUN apt-get update && apt-get install -y --no-install-recommends curl stress-ng \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies
+COPY services/${SERVICE_NAME}/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy shared modules
+COPY shared /app/shared
+
+# Copy application code
+COPY services/${SERVICE_NAME}/app /app/app
+
+# Add shared to Python path
+ENV PYTHONPATH="/app/shared:${PYTHONPATH}"
+ENV SERVICE_PORT=${SERVICE_PORT}
+
+EXPOSE ${SERVICE_PORT}
+
+# Create non-root user
+RUN useradd -r -u 1001 appuser
+USER appuser
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${SERVICE_PORT}/health || exit 1
+
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${SERVICE_PORT}

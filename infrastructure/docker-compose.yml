@@ -1,0 +1,235 @@
+version: "3.9"
+
+# Workshop note:
+#   All secrets are sourced from a local .env file (gitignored).
+#   Run `./scripts/generate-env.sh` once to create one with random values.
+#   The `${VAR:?msg}` syntax forces docker-compose to fail loudly if any
+#   secret is missing — this is intentional.
+
+x-service-defaults: &service-defaults
+  environment: &service-env
+    DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - run scripts/generate-env.sh}
+    JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+    JWT_ISSUER: ${JWT_ISSUER:-loan-management-system}
+    JWT_AUDIENCE: ${JWT_AUDIENCE:-loan-management-api}
+    APP_ENV: ${APP_ENV:-local}
+    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8000,http://localhost:5173}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+  postgresql:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-loandb}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - run scripts/generate-env.sh}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-schemas.sql:/docker-entrypoint-initdb.d/01-init-schemas.sql
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    # Workshop note: redis-cli AUTH is enabled when REDIS_PASSWORD is set.
+    command: ["sh", "-c", "if [ -n \"$$REDIS_PASSWORD\" ]; then exec redis-server --requirepass $$REDIS_PASSWORD; else exec redis-server; fi"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "6379:6379"
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build: ../services/auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *service-env
+      SERVICE_NAME: auth-service
+      SERVICE_PORT: "8001"
+      ENABLE_DEMO_SEED: ${ENABLE_DEMO_SEED:-false}
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  customer-service:
+    build: ../services/customer-service
+    ports: ["8002:8002"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: customer-service
+      SERVICE_PORT: "8002"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  loan-service:
+    build: ../services/loan-service
+    ports: ["8003:8003"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: loan-service
+      SERVICE_PORT: "8003"
+      ALLOW_STRESS_TEST: ${ALLOW_STRESS_TEST:-false}
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  underwriting-service:
+    build: ../services/underwriting-service
+    ports: ["8004:8004"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: underwriting-service
+      SERVICE_PORT: "8004"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  disbursement-service:
+    build: ../services/disbursement-service
+    ports: ["8005:8005"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: disbursement-service
+      SERVICE_PORT: "8005"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  repayment-service:
+    build: ../services/repayment-service
+    ports: ["8006:8006"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: repayment-service
+      SERVICE_PORT: "8006"
+      AUTO_DEBIT_SUCCESS_RATE: "0.9"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  collections-service:
+    build: ../services/collections-service
+    ports: ["8007:8007"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: collections-service
+      SERVICE_PORT: "8007"
+      REMINDER_DAYS: "3"
+      OVERDUE_NOTICE_DAYS: "7"
+      LEGAL_NOTICE_DAYS: "15"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  notification-service:
+    build: ../services/notification-service
+    ports: ["8008:8008"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: notification-service
+      SERVICE_PORT: "8008"
+      EMAIL_SIMULATION: "true"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  audit-service:
+    build: ../services/audit-service
+    ports: ["8009:8009"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: audit-service
+      SERVICE_PORT: "8009"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  dashboard-service:
+    build: ../services/dashboard-service
+    ports: ["8010:8010"]
+    environment:
+      <<: *service-env
+      SERVICE_NAME: dashboard-service
+      SERVICE_PORT: "8010"
+    depends_on:
+      postgresql: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - auth-service
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/proxy_headers.conf:/etc/nginx/proxy_headers.conf:ro
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+      - /var/log/nginx
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      - auth-service
+      - customer-service
+      - loan-service
+      - underwriting-service
+      - disbursement-service
+      - repayment-service
+      - collections-service
+      - notification-service
+      - audit-service
+      - dashboard-service
+      - frontend
+
+volumes:
+  postgres_data:

@@ -1,0 +1,5 @@
+{
+  "contentDir": "content",
+  "staticPrefix": "/static",
+  "staticDir": "./static"
+}
