@@ -57,7 +57,7 @@ export interface MonitoringConstructProps {
 export class MonitoringConstruct extends Construct {
   public readonly alarmTopic: sns.Topic;
   public readonly webhookLambda: lambda.Function;
-  public readonly webhookSecret?: secretsmanager.Secret;
+  public readonly webhookSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: MonitoringConstructProps) {
     super(scope, id);
@@ -71,18 +71,22 @@ export class MonitoringConstruct extends Construct {
     });
 
     // -------------------------------------------------------------------------
-    // Webhook secret (only if a shared secret was supplied)
+    // Webhook secret (always created; participant updates the value in Module 0)
     // -------------------------------------------------------------------------
-    let webhookSecretArn = '';
-    if (props.devopsAgentWebhookSecret) {
-      this.webhookSecret = new secretsmanager.Secret(this, 'WebhookSecret', {
-        secretName: 'loan-management/devops-agent-webhook-secret',
-        description: 'HMAC-SHA256 shared secret for AWS DevOps Agent webhook signing.',
-        secretStringValue: cdk.SecretValue.unsafePlainText(props.devopsAgentWebhookSecret),
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      });
-      webhookSecretArn = this.webhookSecret.secretArn;
-    }
+    // The webhook URL and shared secret are both created with a well-known
+    // placeholder value on a fresh deploy. Workshop Module 0 tells the
+    // participant to update the URL (Lambda env) and the secret (Secrets
+    // Manager) after creating their DevOps Agent webhook. Alternatively,
+    // re-deploy with `-c devopsAgentWebhookUrl=<url> -c devopsAgentWebhookSecret=<secret>`.
+    const effectiveWebhookUrl = props.devopsAgentWebhookUrl || 'PLACEHOLDER_UPDATE_AFTER_DEVOPS_AGENT_SETUP';
+    const effectiveWebhookSecret = props.devopsAgentWebhookSecret || 'PLACEHOLDER_UPDATE_AFTER_DEVOPS_AGENT_SETUP';
+
+    this.webhookSecret = new secretsmanager.Secret(this, 'WebhookSecret', {
+      secretName: 'loan-management/devops-agent-webhook-secret',
+      description: 'HMAC-SHA256 shared secret for AWS DevOps Agent webhook signing. Update this value after creating your DevOps Agent webhook.',
+      secretStringValue: cdk.SecretValue.unsafePlainText(effectiveWebhookSecret),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
     // -------------------------------------------------------------------------
     // Webhook Lambda
@@ -96,8 +100,8 @@ export class MonitoringConstruct extends Construct {
       timeout: cdk.Duration.seconds(30),
       memorySize: 128,
       environment: {
-        WEBHOOK_URL: props.devopsAgentWebhookUrl ?? '',
-        WEBHOOK_SECRET_ARN: webhookSecretArn,
+        WEBHOOK_URL: effectiveWebhookUrl,
+        WEBHOOK_SECRET_ARN: this.webhookSecret.secretArn,
       },
       logGroup: new logs.LogGroup(this, 'WebhookFnLogs', {
         logGroupName: '/aws/lambda/LoanMgmt-DevOpsAgent-Webhook',
@@ -114,10 +118,8 @@ export class MonitoringConstruct extends Construct {
       })
     );
 
-    // Single-ARN Secrets Manager grant when configured.
-    if (this.webhookSecret) {
-      this.webhookSecret.grantRead(this.webhookLambda);
-    }
+    // Single-ARN Secrets Manager grant.
+    this.webhookSecret.grantRead(this.webhookLambda);
 
     // SNS → Lambda subscription (the SNS topic is the alarm action target).
     this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.webhookLambda));
