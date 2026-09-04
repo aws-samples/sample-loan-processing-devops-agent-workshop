@@ -17,6 +17,19 @@ echo "==============================================================="
 echo "  LAB 1 (FIX): Recovering loan-service"
 echo "==============================================================="
 
+# Idempotent pre-check: if the RDS high-connections alarm is already OK, the
+# pool has recovered (or was never exhausted here) and forcing another
+# deployment is unnecessary. Treat that as a safe no-op.
+ALARM_STATE=$(aws cloudwatch describe-alarms \
+    --alarm-names LoanMgmt-RDS-HighConnections \
+    --region "${REGION}" \
+    --query 'MetricAlarms[0].StateValue' \
+    --output text 2>/dev/null || echo "UNKNOWN")
+if [ "${ALARM_STATE}" == "OK" ]; then
+    echo "LoanMgmt-RDS-HighConnections is already OK — nothing to recover."
+    exit 0
+fi
+
 echo "Forcing new deployment of ${SERVICE} in cluster ${CLUSTER} (region ${REGION})..."
 aws ecs update-service \
     --cluster "${CLUSTER}" \
