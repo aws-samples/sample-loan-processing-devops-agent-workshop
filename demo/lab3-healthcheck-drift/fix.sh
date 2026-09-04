@@ -18,6 +18,28 @@ if [[ -f "${BACKUP_FILE}" ]]; then
     GOOD_TASKDEF="$(cat "${BACKUP_FILE}")"
     echo "Restoring saved task definition: ${GOOD_TASKDEF}"
 else
+    # Idempotent path: inject.sh writes the backup before rolling the service to
+    # the bad task-def. A missing backup means the fault was never injected here
+    # or was already fixed. Blindly deploying REVISION-1 in that case would roll
+    # a healthy service BACK to an older revision, so first check whether the
+    # service is already stable and no-op if so.
+    RUNNING="$(aws ecs describe-services \
+        --cluster "${CLUSTER}" \
+        --services "${SERVICE}" \
+        --region "${REGION}" \
+        --query 'services[0].runningCount' \
+        --output text 2>/dev/null || echo "0")"
+    DESIRED="$(aws ecs describe-services \
+        --cluster "${CLUSTER}" \
+        --services "${SERVICE}" \
+        --region "${REGION}" \
+        --query 'services[0].desiredCount' \
+        --output text 2>/dev/null || echo "0")"
+    if [[ "${RUNNING}" == "${DESIRED}" && "${RUNNING}" != "0" ]]; then
+        echo "WARN: ${BACKUP_FILE} not found, but ${SERVICE} is already stable"
+        echo "  (${RUNNING}/${DESIRED} tasks running). Nothing to restore — already recovered."
+        exit 0
+    fi
     echo "WARN: ${BACKUP_FILE} not found. Using the previous revision in the family."
     CURRENT_TASKDEF="$(aws ecs describe-services \
         --cluster "${CLUSTER}" \
