@@ -26,6 +26,18 @@ The script:
 After injection, the next `POST /api/v1/audit/kyc/archive` returns 502
 "AccessDenied", the ALB 5xx alarm fires, and DevOps Agent investigates.
 
+To drive an archive request from the UI, submit a loan application and upload a
+KYC document. To drive it directly with `curl`, send a valid payload (the
+`content_b64` field must be base64-encoded document bytes; `customer_id` and
+`document_type` are required):
+
+```bash
+curl -X POST "https://<your-cloudfront-domain>/api/v1/audit/kyc/archive" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"11111111-1111-1111-1111-111111111111","document_type":"DRIVERS_LICENCE","content_b64":"'"$(echo 'sample document bytes' | base64)"'"}'
+```
+
 ## What the agent should find
 
 - ALB 5xx alarm + audit-service container logs containing `AccessDenied`
